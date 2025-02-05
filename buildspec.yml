@@ -1,0 +1,61 @@
+version: 0.2
+
+env:
+  variables:
+    S3_BUCKET: "my-artifact-bucket"
+    AWS_REGION: "us-east-1"
+    DEPLOY_ENV: "staging"
+  parameter-store:
+    ECR_SECRET: "/codebuild/ecr-credentials"  # Secure ECR credentials from AWS Secrets Manager
+    DB_PASSWORD: "/myapp/db-password"  # Secure database password
+
+phases:
+  install:
+    commands:
+      - echo "Installing dependencies..."
+      - yum install -y jq  # JSON parser required for AWS Secrets Manager output
+      - curl -fsSL https://get.pipenv.org | python3  # Example: Install Pipenv
+
+  pre_build:
+    commands:
+      - echo "Pre-build phase started on $(date)"
+      - echo "Retrieving ECR credentials from Secrets Manager..."
+      - ECR_PASSWORD=$(aws secretsmanager get-secret-value --secret-id $ECR_SECRET --query SecretString --output text | jq -r .ecr_password)
+      - echo "Logging in to AWS ECR securely..."
+      - echo $ECR_PASSWORD | docker login --username AWS --password-stdin <ecr-repo>
+      - echo "Running tests before build..."
+      - mvn test
+
+  build:
+    commands:
+      - echo "Build phase started on $(date)"
+      - echo "Compiling and packaging the application..."
+      - mvn clean package -DskipTests=false
+      - echo "Generating test reports..."
+      - mvn surefire-report:report
+      - echo "Build completed successfully!"
+
+  post_build:
+    commands:
+      - echo "Post-build phase started on $(date)"
+      - echo "Uploading artifacts to S3..."
+      - aws s3 cp target/ccdemo.war s3://$S3_BUCKET/$DEPLOY_ENV/
+      - echo "Triggering deployment..."
+      - aws deploy create-deployment --application-name my-codeDeploy-app \
+          --deployment-group-name my-deployment-group \
+          --s3-location bucket=$S3_BUCKET,key=$DEPLOY_ENV/ccdemo.war,bundleType=zip
+      - echo "Deployment triggered successfully!"
+
+artifacts:
+  files:
+    - target/ccdemo.war
+  discard-paths: yes
+  name: ccdemo-${CODEBUILD_BUILD_ID}.war
+
+reports:
+  SurefireReport:
+    files:
+      - target/surefire-reports/TEST-*.xml
+      - target/site/surefire-report.html
+    base-directory: target/surefire-reports
+    file-format: JUNITXML
