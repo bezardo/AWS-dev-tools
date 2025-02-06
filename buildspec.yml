@@ -1,24 +1,32 @@
 version: 0.2
 
+runtime-versions:
+  java: 17  # Java version for Maven build
+  python: 3.8  # Python runtime for additional scripts (if needed)
+
 env:
   variables:
     S3_BUCKET: "my-artifact-bucket"
     AWS_REGION: "us-east-1"
     DEPLOY_ENV: "staging"
   parameter-store:
-    ECR_SECRET: "/codebuild/ecr-credentials"  # Secure ECR credentials from AWS Secrets Manager
-    DB_PASSWORD: "/myapp/db-password"  # Secure database password
+    ECR_SECRET: "/codebuild/ecr-credentials"
+    DB_PASSWORD: "/myapp/db-password"
+
+cache:
+  paths:
+    - '/root/.m2/**/*'  # Cache Maven dependencies
+    - '/root/.npm/**/*'  # Cache NPM dependencies (if applicable)
 
 phases:
   install:
     commands:
       - echo "Installing dependencies..."
-      - yum install -y jq  # JSON parser required for AWS Secrets Manager output
-      - curl -fsSL https://get.pipenv.org | python3  # Example: Install Pipenv
+      - yum install -y jq  # JSON parser for AWS Secrets Manager
+      - curl -fsSL https://get.pipenv.org | python3
 
   pre_build:
     commands:
-      - echo "Pre-build phase started on $(date)"
       - echo "Retrieving ECR credentials from Secrets Manager..."
       - ECR_PASSWORD=$(aws secretsmanager get-secret-value --secret-id $ECR_SECRET --query SecretString --output text | jq -r .ecr_password)
       - echo "Logging in to AWS ECR securely..."
@@ -37,7 +45,6 @@ phases:
 
   post_build:
     commands:
-      - echo "Post-build phase started on $(date)"
       - echo "Uploading artifacts to S3..."
       - aws s3 cp target/ccdemo.war s3://$S3_BUCKET/$DEPLOY_ENV/
       - echo "Triggering deployment..."
@@ -59,3 +66,10 @@ reports:
       - target/site/surefire-report.html
     base-directory: target/surefire-reports
     file-format: JUNITXML
+
+file-system:
+  mount:
+    - identifier: "efs-id"
+      mount-point: "/mnt/efs"
+      type: "EFS"
+      options: "defaults"
